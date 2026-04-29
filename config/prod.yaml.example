@@ -1,0 +1,6 @@
+stack_name: ssm-on-demand
+vpc_id: vpc-xxxxxxxxxxxxxxxxx
+subnet_ids: subnet-xxxxxxxxxxxxxxxxx,subnet-yyyyyyyyyyyyyyyyy
+environment: prod
+sns_topic: ""  # optional, e.g. arn:aws:sns:ap-southeast-2:123456789012:my-topic
+owner: your-name

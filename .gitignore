@@ -25,6 +25,9 @@ Session.vim
 .ruff_cache/
 .rumdl_cache/
 
+# direnv
+.envrc
+
 # Environment configs (contain real VPC IDs, account numbers, etc.)
 config/*.yaml
 !config/*.yaml.example

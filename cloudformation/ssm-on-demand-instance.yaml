@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: On-demand Graviton instance via ASG with auto-shutdown when no SSM sessions or Run Commands
+
+Parameters:
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64'
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  Environment:
+    Type: String
+    Default: prod
+  BastionSourceSecurityGroupId:
+    Type: String
+    Default: ''
+    Description: Bastion source security group ID for database access (optional)
+  NotificationTopicArn:
+    Type: String
+    Default: ''
+    Description: SNS topic ARN for alarm notifications (optional)
+
+Conditions:
+  HasBastionSourceSG: !Not [!Equals [!Ref BastionSourceSecurityGroupId, '']]
+  HasNotificationTopic: !Not [!Equals [!Ref NotificationTopicArn, '']]
+
+Resources:
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: No ingress - SSM only
+      VpcId: !Ref VpcId
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: t4g.nano
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            Groups:
+              !If
+                - HasBastionSourceSG
+                - [!Ref SecurityGroup, !Ref BastionSourceSecurityGroupId]
+                - [!Ref SecurityGroup]
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            set -euo pipefail
+            # EC2 Instance Connect is pre-installed on AL2023 standard AMI
+            # SSH keys are pushed ephemerally via send-ssh-public-key API
+            # SELinux enforcing
+            setenforce 1 || true
+
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: '0'
+      MaxSize: '1'
+      DesiredCapacity: '0'
+      VPCZoneIdentifier: !Ref SubnetIds
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ASGAndSSM
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - autoscaling:SetDesiredCapacity
+                Resource: !Sub 'arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${ASG}'
+              - Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                  - ssm:DescribeSessions
+                  - ssm:ListCommands
+                  - ec2:DescribeInstances
+                Resource: '*'
+
+  StartInstanceFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          ASG_NAME: !Ref ASG
+      Code:
+        ZipFile: |
+          import boto3, os
+          def handler(event, context):
+              boto3.client('autoscaling').set_desired_capacity(
+                  AutoScalingGroupName=os.environ['ASG_NAME'],
+                  DesiredCapacity=1
+              )
+              return {'statusCode': 200, 'body': 'Desired capacity set to 1'}
+
+  StopIfIdleFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          ASG_NAME: !Ref ASG
+      Code:
+        ZipFile: |
+          import boto3, os
+          from datetime import datetime, timezone, timedelta
+
+          asg_client = boto3.client('autoscaling')
+          ssm_client = boto3.client('ssm')
+          ec2_client = boto3.client('ec2')
+
+          def handler(event, context):
+              asg_name = os.environ['ASG_NAME']
+              asg = asg_client.describe_auto_scaling_groups(AutoScalingGroupNames=[asg_name])['AutoScalingGroups'][0]
+
+              if not asg['Instances']:
+                  return 'No instances running'
+
+              instance = asg['Instances'][0]
+              instance_id = instance['InstanceId']
+
+              if instance['LifecycleState'] != 'InService':
+                  return f'Instance {instance_id} in {instance["LifecycleState"]}, skipping'
+
+              # Check if instance has been up for at least 5 minutes
+              try:
+                  reservations = ec2_client.describe_instances(InstanceIds=[instance_id])['Reservations']
+                  launch_time = reservations[0]['Instances'][0]['LaunchTime']
+              except Exception as e:
+                  return f'Could not describe {instance_id}: {e}'
+              age = datetime.now(timezone.utc) - launch_time
+
+              if age < timedelta(minutes=5):
+                  return f'Instance {instance_id} only {age} old, keeping alive'
+
+              # Check for active SSM sessions to this instance
+              sessions = ssm_client.describe_sessions(
+                  State='Active',
+                  Filters=[{'key': 'Target', 'value': instance_id}]
+              )['Sessions']
+
+              if sessions:
+                  return f'{len(sessions)} active session(s), keeping alive'
+
+              # Check for in-progress SSM Run Commands on this instance
+              commands = ssm_client.list_commands(
+                  InstanceId=instance_id,
+                  Filters=[{'key': 'Status', 'value': 'InProgress'}]
+              )['Commands']
+
+              if commands:
+                  return f'{len(commands)} in-progress command(s), keeping alive'
+
+              # No sessions, no commands, past grace period — scale to 0
+              asg_client.set_desired_capacity(
+                  AutoScalingGroupName=asg_name,
+                  DesiredCapacity=0
+              )
+              return f'No sessions on {instance_id}, scaled to 0'
+
+  IdleCheckSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StopIfIdleFn.Arn
+          Id: StopIfIdleTarget
+
+  IdleCheckPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StopIfIdleFn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt IdleCheckSchedule.Arn
+
+  IdleCheckErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: StopIfIdleFn has failed 3 times in a row — instance may not auto-terminate
+      AlarmActions:
+        !If
+          - HasNotificationTopic
+          - [!Ref NotificationTopicArn]
+          - !Ref 'AWS::NoValue'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref StopIfIdleFn
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  StartFunctionArn:
+    Description: Invoke this Lambda to start the instance (set desired=1)
+    Value: !GetAtt StartInstanceFn.Arn
+  AutoScalingGroupName:
+    Value: !Ref ASG
+  Environment:
+    Value: !Ref Environment

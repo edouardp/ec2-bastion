@@ -1,0 +1,16 @@
+[project]
+name = "on-demand-ec2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.42.88",
+    "duckdb>=1.5.2",
+    "marimo>=0.23.1",
+    "pandas>=3.0.2",
+    "psycopg2-binary>=2.9.11",
+    "pyyaml>=6.0",
+    "sqlalchemy>=2.0.49",
+    "sqlglot>=30.4.3",
+]

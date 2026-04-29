@@ -1,0 +1,5 @@
+{
+  "both": "Both environments",
+  "prod": "Production instance — the real deal",
+  "staging": "Staging instance — safe to experiment"
+}
