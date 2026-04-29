@@ -1,0 +1,35 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Marimo
+__marimo__/
+
+# Editor files
+*.swp
+*.swo
+*~
+Session.vim
+
+# OS files
+.DS_Store
+
+# Linting caches
+.ruff_cache/
+.rumdl_cache/
+
+# Environment configs (contain real VPC IDs, account numbers, etc.)
+config/*.yaml
+!config/*.yaml.example
+
+# Kiro
+.agents/
+.kiro/
+skills-lock.json
