@@ -19,3 +19,4 @@
 | [015](015-yaml-config-files.md) | YAML config files for environment parameters | Accepted |
 | [016](016-interactive-environment-chooser.md) | Interactive environment chooser for Make targets | Accepted |
 | [017](017-ec2-instance-connect.md) | EC2 Instance Connect for SSH key management | Accepted |
+| [018](018-resolve-ssm-for-ami.md) | Dynamic AMI resolution via resolve:ssm | Accepted |

@@ -97,7 +97,6 @@ Stack parameters (set via the config file):
 | `VpcId`                      | —            | VPC for the instance                                 |
 | `SubnetIds`                  | —            | Comma-separated subnet IDs                           |
 | `Environment`                | `prod`       | Used in SSM parameter paths                          |
-| `LatestAmiId`                | AL2023 arm64 | SSM parameter for the AMI                            |
 | `BastionSourceSecurityGroupId` | (auto)     | Resolved from SSM; warns and skips if missing        |
 
 ## Marimo notebook
@@ -124,7 +123,7 @@ and manage connections.
   `StopIfIdleFn` Lambda code and the EventBridge
   `rate(5 minutes)` rule
 - To use Amazon Linux 2 instead of AL2023, change the
-  `LatestAmiId` default to
+  `resolve:ssm` path in the Launch Template `ImageId` to
   `/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-arm64-gp2`
 
 ## Monitoring and debugging
