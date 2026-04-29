@@ -43,10 +43,13 @@ help: ## Show this help message
 	@echo "  \033[1mCommands\033[0m"
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		grep -v -E -- '-(staging|prod):' | \
+		sort -t: -k1,1 | \
+		awk '/^help:/ {h=$$0; next} {lines[++n]=$$0} END {print h; for(i=1;i<=n;i++) print lines[i]}' | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  \033[1mEnvironment-specific Commands\033[0m"
 	@grep -E '^[a-zA-Z0-9_-]+-(staging|prod):.*?## .*$$' $(MAKEFILE_LIST) | \
+		sort -t: -k1,1 | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 # --- Deploy ---
