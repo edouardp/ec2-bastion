@@ -39,8 +39,15 @@ endef
 all: help
 
 help: ## Show this help message
+	@echo ""
+	@echo "  \033[1mCommands\033[0m"
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
+		grep -v -E -- '-(staging|prod):' | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  \033[1mEnvironment-specific Commands\033[0m"
+	@grep -E '^[a-zA-Z0-9_-]+-(staging|prod):.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 # --- Deploy ---
 define deploy_stack
